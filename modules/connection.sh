@@ -579,8 +579,6 @@ output = /var/log/stunnel4/stunnel.log
 [sshtunnel]
 accept = ${porta}
 connect = 127.0.0.1:${portssl}
-; ALPN: advertise HTTP/2 + HTTP/1.1 (matches real browsers)
-ALPN = h2,http/1.1
 SSLEOF
             echo -e "  ${YELLOW}]${WHITE} -${GREEN} DONE!${NC}"
             
