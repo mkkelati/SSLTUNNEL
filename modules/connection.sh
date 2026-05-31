@@ -499,15 +499,35 @@ inst_ssl() {
             echo -e "\n${GREEN}CONFIGURING SSL TUNNEL!${NC}\n"
             
             ssl_conf() {
-                echo -e "cert = /etc/stunnel/stunnel.pem\nclient = no\nsocket = a:SO_REUSEADDR=1\nsocket = l:TCP_NODELAY=1\nsocket = r:TCP_NODELAY=1\n\n[stunnel]\nconnect = 127.0.0.1:$portssl\naccept = ${porta}" > /etc/stunnel/stunnel.conf
+                cat > /etc/stunnel/stunnel.conf << SSLEOF
+cert = /etc/stunnel/stunnel.pem
+client = no
+socket = a:SO_REUSEADDR=1
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+
+; Enforce TLSv1.3 with AES-256-GCM-SHA384
+sslVersion = TLSv1.3
+ciphersuites = TLS_AES_256_GCM_SHA384
+options = NO_SSLv2
+options = NO_SSLv3
+options = NO_TLSv1
+options = NO_TLSv1.1
+options = NO_TLSv1.2
+
+[stunnel]
+connect = 127.0.0.1:$portssl
+accept = ${porta}
+SSLEOF
             }
             fun_bar 'ssl_conf'
             
             echo -e "\n${GREEN}CREATING CERTIFICATE!${NC}\n"
             ssl_certif() {
-                openssl genrsa -out key.pem 2048 >/dev/null 2>&1
-                openssl req -new -x509 -key key.pem -out cert.pem -days 1050 -subj "/C=US/ST=State/L=City/O=SSHTunnel/CN=sshtunnel" >/dev/null 2>&1
+                openssl ecparam -genkey -name prime256v1 -out key.pem >/dev/null 2>&1
+                openssl req -new -x509 -key key.pem -out cert.pem -days 1050 -sha384 -subj "/C=US/ST=State/L=City/O=SSHTunnel/CN=sshtunnel" >/dev/null 2>&1
                 cat cert.pem key.pem > /etc/stunnel/stunnel.pem
+                chmod 600 /etc/stunnel/stunnel.pem
                 rm -f key.pem cert.pem >/dev/null 2>&1
                 sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4
             }
@@ -733,7 +753,10 @@ ifconfig-pool-persist ipp.txt" > /etc/openvpn/server.conf
             
             echo "keepalive 10 120
 float
-cipher AES-256-CBC
+cipher AES-256-GCM
+ncp-ciphers AES-256-GCM
+tls-version-min 1.3
+tls-ciphersuites TLS_AES_256_GCM_SHA384
 comp-lzo yes
 user nobody
 group $GROUPNAME
