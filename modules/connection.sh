@@ -534,8 +534,8 @@ socket = r:TCP_NODELAY=1
 options = NO_SSLv2
 options = NO_SSLv3
 options = NO_TLSv1
-options = NO_TLSv1.1
-options = NO_TLSv1.2
+options = NO_TLSv1_1
+options = NO_TLSv1_2
 
 ; TLS 1.3 cipher enforcement
 ciphersuites = TLS_AES_256_GCM_SHA384
