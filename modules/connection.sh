@@ -502,47 +502,85 @@ inst_ssl() {
             mkdir -p /etc/stunnel
             
             # Step 3: Generate certificate FIRST (before config references it)
-            echo -e "\n${GREEN}CREATING TLSv1.3 CERTIFICATE!${NC}\n"
+            echo -e "\n${GREEN}CREATING TLSv1.3 ANTI-DPI CERTIFICATE!${NC}\n"
             _gen_ssl_cert() {
                 cd /etc/stunnel
-                # Generate RSA 2048 key (widely compatible with TLS 1.3)
-                openssl req -new -newkey rsa:2048 -days 1050 -nodes -x509 \
-                    -sha256 -subj "/C=US/ST=State/L=City/O=SSHTunnel/CN=sshtunnel" \
+                local SERVER_IP
+                SERVER_IP=$(wget -qO- ipv4.icanhazip.com 2>/dev/null || curl -s ifconfig.me 2>/dev/null)
+                [[ -z "$SERVER_IP" ]] && SERVER_IP="127.0.0.1"
+                
+                # Generate RSA 4096 key with realistic cert fields (anti-DPI)
+                openssl req -new -newkey rsa:4096 -days 1050 -nodes -x509 \
+                    -sha384 \
+                    -subj "/C=US/ST=California/L=San Francisco/O=Cloudflare Inc/OU=SSL/CN=${SERVER_IP}" \
+                    -addext "subjectAltName=IP:${SERVER_IP}" \
                     -keyout /etc/stunnel/stunnel.key -out /etc/stunnel/stunnel.crt 2>/dev/null
+                
+                # Fallback if -addext not supported on older openssl
+                [[ ! -s /etc/stunnel/stunnel.crt ]] && {
+                    openssl req -new -newkey rsa:4096 -days 1050 -nodes -x509 \
+                        -sha384 \
+                        -subj "/C=US/ST=California/L=San Francisco/O=Cloudflare Inc/OU=SSL/CN=${SERVER_IP}" \
+                        -keyout /etc/stunnel/stunnel.key -out /etc/stunnel/stunnel.crt 2>/dev/null
+                }
+                
                 cat /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key > /etc/stunnel/stunnel.pem
                 chmod 600 /etc/stunnel/stunnel.pem /etc/stunnel/stunnel.key
                 rm -f /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key
             }
             fun_bar '_gen_ssl_cert'
             
-            # Step 4: Write stunnel config (TLSv1.3 enforced)
-            echo -e "\n${GREEN}CONFIGURING SSL TUNNEL (TLSv1.3 / AES-256-GCM-SHA384)!${NC}\n"
+            # Step 4: Write stunnel config (TLSv1.3 + Anti-DPI hardened)
+            echo -e "\n${GREEN}CONFIGURING SSL TUNNEL (TLSv1.3 / Anti-DPI Hardened)!${NC}\n"
             cat > /etc/stunnel/stunnel.conf << SSLEOF
 ; ============================================
 ; SSH Tunnel Manager - stunnel4 configuration
 ; Enforced: TLSv1.3 / TLS_AES_256_GCM_SHA384
+; Anti-DPI Hardened for ISP bypass
 ; ============================================
 
 pid = /var/run/stunnel4/stunnel4.pid
 cert = /etc/stunnel/stunnel.pem
 client = no
+
+; === Socket tuning (mimic real web server) ===
 socket = a:SO_REUSEADDR=1
 socket = l:TCP_NODELAY=1
 socket = r:TCP_NODELAY=1
+socket = a:SO_KEEPALIVE=1
 
-; Disable all protocols below TLS 1.3
+; === TLS 1.3 Only ===
 options = NO_SSLv2
 options = NO_SSLv3
 options = NO_TLSv1
 options = NO_TLSv1_1
 options = NO_TLSv1_2
 
-; TLS 1.3 cipher enforcement
-ciphersuites = TLS_AES_256_GCM_SHA384
+; === Cipher: AES-256-GCM primary, CHACHA20 fallback ===
+ciphersuites = TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+
+; === Strong ECDH curves (P-384 primary) ===
+curves = P-384:P-521:X25519
+
+; === Session management (looks like real HTTPS) ===
+sessionCacheSize = 20000
+sessionCacheTimeout = 300
+renegotiation = no
+
+; === Connection timeouts ===
+TIMEOUTclose = 0
+TIMEOUTconnect = 10
+TIMEOUTidle = 43200
+
+; === Logging ===
+debug = 0
+output = /var/log/stunnel4/stunnel.log
 
 [sshtunnel]
 accept = ${porta}
 connect = 127.0.0.1:${portssl}
+; ALPN: advertise HTTP/2 + HTTP/1.1 (matches real browsers)
+ALPN = h2,http/1.1
 SSLEOF
             echo -e "  ${YELLOW}]${WHITE} -${GREEN} DONE!${NC}"
             
@@ -572,6 +610,10 @@ SSLEOF
                 echo -e "${GREEN}◇ PORT: ${YELLOW}${porta}${NC}"
                 echo -e "${GREEN}◇ PROTOCOL: ${YELLOW}TLSv1.3${NC}"
                 echo -e "${GREEN}◇ CIPHER: ${YELLOW}TLS_AES_256_GCM_SHA384${NC}"
+                echo -e "${GREEN}◇ CURVES: ${YELLOW}P-384 / P-521 / X25519${NC}"
+                echo -e "${GREEN}◇ ALPN: ${YELLOW}h2, http/1.1${NC}"
+                echo -e "${GREEN}◇ KEY: ${YELLOW}RSA 4096-bit / SHA-384${NC}"
+                echo -e "${GREEN}◇ ANTI-DPI: ${YELLOW}ENABLED${NC}"
                 echo -e "${GREEN}◇ CONNECT: ${YELLOW}127.0.0.1:${portssl}${NC}"
             else
                 echo -e "\n${RED}◇ WARNING: stunnel may not have started properly!${NC}"
