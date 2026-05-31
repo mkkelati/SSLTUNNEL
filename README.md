@@ -11,14 +11,17 @@ A comprehensive VPS management tool for SSH tunneling, user management, and serv
 - **Backup**: Full user backup and restore
 - **Extras**: DNS host management, connection limiter, Telegram bot integration
 
-## Installation
+## One-Line Installation
 
 ```bash
-# Clone the repository
-git clone <your-repo-url> /root/ssltunnel
-cd /root/ssltunnel
+apt update && apt install git -y && git clone https://github.com/mkkelati/SSLTUNNEL.git /root/ssltunnel && cd /root/ssltunnel && chmod +x install.sh && bash install.sh
+```
 
-# Run the installer
+## Manual Installation
+
+```bash
+git clone https://github.com/mkkelati/SSLTUNNEL.git /root/ssltunnel
+cd /root/ssltunnel
 chmod +x install.sh
 bash install.sh
 ```
