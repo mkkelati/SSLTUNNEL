@@ -26,11 +26,11 @@ MANAGER_LICENSE="/usr/lib/sshtunnelmanager"
 fun_bar() {
     local comando=("$1" "$2")
     (
-        [[ -e $HOME/fim ]] && rm $HOME/fim
-        ${comando[0]} >/dev/null 2>&1
-        ${comando[1]} >/dev/null 2>&1
+        [[ -e $HOME/fim ]] && rm -f $HOME/fim
+        eval "${comando[0]}" >/dev/null 2>&1
+        [[ -n "${comando[1]}" ]] && eval "${comando[1]}" >/dev/null 2>&1
         touch $HOME/fim
-    ) >/dev/null 2>&1 &
+    ) &
     tput civis
     echo -ne "  ${YELLOW}Please Wait... ${WHITE}- ${YELLOW}["
     while true; do
@@ -38,7 +38,7 @@ fun_bar() {
             echo -ne "${RED}#"
             sleep 0.1s
         done
-        [[ -e $HOME/fim ]] && rm $HOME/fim && break
+        [[ -e $HOME/fim ]] && rm -f $HOME/fim && break
         echo -e "${YELLOW}]"
         sleep 1s
         tput cuu1

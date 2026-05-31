@@ -493,55 +493,102 @@ inst_ssl() {
             [[ -z "$porta" ]] && { echo -e "\n${RED}Invalid port!${NC}"; sleep 3; clear; fun_conexao; }
             verify_port "$porta" || { sleep 3; fun_conexao; }
             
+            # Step 1: Install stunnel4
             echo -e "\n${GREEN}INSTALLING SSL TUNNEL!${YELLOW}"
             echo ""
-            fun_bar 'apt-get update -y' 'apt-get install stunnel4 -y'
-            echo -e "\n${GREEN}CONFIGURING SSL TUNNEL!${NC}\n"
+            fun_bar 'apt-get update -y' 'apt-get install stunnel4 openssl -y'
             
-            ssl_conf() {
-                cat > /etc/stunnel/stunnel.conf << SSLEOF
+            # Step 2: Create directories
+            mkdir -p /etc/stunnel
+            
+            # Step 3: Generate certificate FIRST (before config references it)
+            echo -e "\n${GREEN}CREATING TLSv1.3 CERTIFICATE!${NC}\n"
+            _gen_ssl_cert() {
+                cd /etc/stunnel
+                # Generate RSA 2048 key (widely compatible with TLS 1.3)
+                openssl req -new -newkey rsa:2048 -days 1050 -nodes -x509 \
+                    -sha256 -subj "/C=US/ST=State/L=City/O=SSHTunnel/CN=sshtunnel" \
+                    -keyout /etc/stunnel/stunnel.key -out /etc/stunnel/stunnel.crt 2>/dev/null
+                cat /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key > /etc/stunnel/stunnel.pem
+                chmod 600 /etc/stunnel/stunnel.pem /etc/stunnel/stunnel.key
+                rm -f /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key
+            }
+            fun_bar '_gen_ssl_cert'
+            
+            # Step 4: Write stunnel config (TLSv1.3 enforced)
+            echo -e "\n${GREEN}CONFIGURING SSL TUNNEL (TLSv1.3 / AES-256-GCM-SHA384)!${NC}\n"
+            cat > /etc/stunnel/stunnel.conf << SSLEOF
+; ============================================
+; SSH Tunnel Manager - stunnel4 configuration
+; Enforced: TLSv1.3 / TLS_AES_256_GCM_SHA384
+; ============================================
+
+pid = /var/run/stunnel4/stunnel4.pid
 cert = /etc/stunnel/stunnel.pem
 client = no
 socket = a:SO_REUSEADDR=1
 socket = l:TCP_NODELAY=1
 socket = r:TCP_NODELAY=1
 
-; Enforce TLSv1.3 with AES-256-GCM-SHA384
-sslVersion = TLSv1.3
-ciphersuites = TLS_AES_256_GCM_SHA384
+; Disable all protocols below TLS 1.3
 options = NO_SSLv2
 options = NO_SSLv3
 options = NO_TLSv1
 options = NO_TLSv1.1
 options = NO_TLSv1.2
 
-[stunnel]
-connect = 127.0.0.1:$portssl
+; TLS 1.3 cipher enforcement
+ciphersuites = TLS_AES_256_GCM_SHA384
+
+[sshtunnel]
 accept = ${porta}
+connect = 127.0.0.1:${portssl}
 SSLEOF
-            }
-            fun_bar 'ssl_conf'
+            echo -e "  ${YELLOW}]${WHITE} -${GREEN} DONE!${NC}"
             
-            echo -e "\n${GREEN}CREATING CERTIFICATE!${NC}\n"
-            ssl_certif() {
-                openssl ecparam -genkey -name prime256v1 -out key.pem >/dev/null 2>&1
-                openssl req -new -x509 -key key.pem -out cert.pem -days 1050 -sha384 -subj "/C=US/ST=State/L=City/O=SSHTunnel/CN=sshtunnel" >/dev/null 2>&1
-                cat cert.pem key.pem > /etc/stunnel/stunnel.pem
-                chmod 600 /etc/stunnel/stunnel.pem
-                rm -f key.pem cert.pem >/dev/null 2>&1
-                sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4
-            }
-            fun_bar 'ssl_certif'
+            # Step 5: Enable stunnel4 service
+            [[ -f /etc/default/stunnel4 ]] && sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4
+            mkdir -p /var/run/stunnel4
+            chown stunnel4:stunnel4 /var/run/stunnel4 2>/dev/null
             
+            # Step 6: Open firewall port
+            [[ -f /usr/sbin/ufw ]] && ufw allow ${porta}/tcp >/dev/null 2>&1
+            
+            # Step 7: Stop any existing stunnel, then start fresh
             echo -e "\n${GREEN}STARTING SSL TUNNEL!${NC}\n"
-            fun_finssl() {
-                service stunnel4 restart
-                service ssh restart
-                /etc/init.d/stunnel4 restart
+            _start_stunnel() {
+                service stunnel4 stop 2>/dev/null
+                killall stunnel4 2>/dev/null
+                sleep 1
+                service stunnel4 start 2>/dev/null || /etc/init.d/stunnel4 start 2>/dev/null || stunnel4 /etc/stunnel/stunnel.conf 2>/dev/null
+                service ssh restart 2>/dev/null
             }
-            fun_bar 'fun_finssl' 'service stunnel4 restart'
-            echo -e "\n${GREEN}SSL TUNNEL SUCCESSFULLY INSTALLED! ${RED}PORT: ${YELLOW}$porta${NC}"
-            sleep 3; clear; fun_conexao
+            fun_bar '_start_stunnel'
+            
+            # Step 8: Verify it's running
+            sleep 2
+            if netstat -nltp 2>/dev/null | grep -q 'stunnel'; then
+                echo -e "\n${GREEN}◇ SSL TUNNEL SUCCESSFULLY INSTALLED!${NC}"
+                echo -e "${GREEN}◇ PORT: ${YELLOW}${porta}${NC}"
+                echo -e "${GREEN}◇ PROTOCOL: ${YELLOW}TLSv1.3${NC}"
+                echo -e "${GREEN}◇ CIPHER: ${YELLOW}TLS_AES_256_GCM_SHA384${NC}"
+                echo -e "${GREEN}◇ CONNECT: ${YELLOW}127.0.0.1:${portssl}${NC}"
+            else
+                echo -e "\n${RED}◇ WARNING: stunnel may not have started properly!${NC}"
+                echo -e "${YELLOW}◇ Checking stunnel log...${NC}"
+                tail -5 /var/log/stunnel4/stunnel.log 2>/dev/null || echo -e "${RED}No log found${NC}"
+                echo ""
+                echo -e "${YELLOW}◇ Trying direct start...${NC}"
+                stunnel4 /etc/stunnel/stunnel.conf 2>&1
+                sleep 2
+                if netstat -nltp 2>/dev/null | grep -q 'stunnel'; then
+                    echo -e "${GREEN}◇ SSL TUNNEL NOW RUNNING on port ${porta}!${NC}"
+                else
+                    echo -e "${RED}◇ FAILED! Check: cat /etc/stunnel/stunnel.conf${NC}"
+                    echo -e "${RED}◇ Your OpenSSL may not support TLSv1.3. Check: openssl version${NC}"
+                fi
+            fi
+            sleep 4; clear; fun_conexao
         } || {
             echo -e "\n${RED}Returning...${NC}"
             sleep 2; clear; fun_conexao
