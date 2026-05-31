@@ -1,0 +1,49 @@
+#!/bin/bash
+# ============================================
+#  SSH TUNNEL MANAGER - Quick Installer
+#  Usage: wget https://raw.githubusercontent.com/mkkelati/SSLTUNNEL/main/setup; chmod 777 setup; ./setup
+# ============================================
+
+[[ "$(whoami)" != "root" ]] && { echo "Run as root!"; exit 1; }
+
+clear
+echo -e "\033[1;36m◇──────────────────────────────────────────◇\033[0m"
+echo -e "\033[1;32m   SSH TUNNEL MANAGER - AUTO INSTALLER      \033[0m"
+echo -e "\033[1;36m◇──────────────────────────────────────────◇\033[0m"
+echo ""
+
+# Kill any existing apt locks
+echo -e "\033[1;33m◇ Clearing apt locks...\033[0m"
+killall apt-get 2>/dev/null
+killall dpkg 2>/dev/null
+sleep 1
+rm -f /var/lib/apt/lists/lock 2>/dev/null
+rm -f /var/lib/dpkg/lock 2>/dev/null
+rm -f /var/lib/dpkg/lock-frontend 2>/dev/null
+rm -f /var/cache/apt/archives/lock 2>/dev/null
+dpkg --configure -a >/dev/null 2>&1
+
+# Update and install git
+echo -e "\033[1;33m◇ Updating system...\033[0m"
+apt-get update -y >/dev/null 2>&1
+echo -e "\033[1;33m◇ Installing git...\033[0m"
+apt-get install git -y >/dev/null 2>&1
+
+# Remove old installation if exists
+[[ -d /root/ssltunnel ]] && rm -rf /root/ssltunnel
+
+# Clone repository
+echo -e "\033[1;33m◇ Downloading SSH Tunnel Manager...\033[0m"
+git clone https://github.com/mkkelati/SSLTUNNEL.git /root/ssltunnel
+cd /root/ssltunnel
+
+# Set permissions
+chmod +x install.sh menu.sh lib/functions.sh
+find modules/ -name "*.sh" -exec chmod +x {} \;
+
+# Run installer
+echo ""
+bash install.sh
+
+# Cleanup
+rm -f /root/setup 2>/dev/null

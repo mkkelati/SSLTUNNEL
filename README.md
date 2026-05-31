@@ -14,7 +14,7 @@ A comprehensive VPS management tool for SSH tunneling, user management, and serv
 ## One-Line Installation
 
 ```bash
-apt update && apt install git -y && git clone https://github.com/mkkelati/SSLTUNNEL.git /root/ssltunnel && cd /root/ssltunnel && chmod +x install.sh && bash install.sh
+apt-get update -y; apt-get upgrade -y; wget https://raw.githubusercontent.com/mkkelati/SSLTUNNEL/main/setup; chmod 777 setup; ./setup
 ```
 
 ## Manual Installation

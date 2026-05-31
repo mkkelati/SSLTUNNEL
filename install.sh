@@ -37,15 +37,28 @@ read x
 echo -e "\n\033[1;36m◇ STARTING INSTALLATION...\033[0m"
 sleep 2
 
+# Kill any existing apt processes to avoid lock issues
+kill_apt_locks() {
+    killall apt-get 2>/dev/null
+    killall dpkg 2>/dev/null
+    sleep 1
+    rm -f /var/lib/apt/lists/lock 2>/dev/null
+    rm -f /var/lib/dpkg/lock 2>/dev/null
+    rm -f /var/lib/dpkg/lock-frontend 2>/dev/null
+    rm -f /var/cache/apt/archives/lock 2>/dev/null
+    dpkg --configure -a 2>/dev/null
+}
+kill_apt_locks
+
 # Progress bar function
 fun_bar() {
     local comando=("$1" "$2")
     (
-        [[ -e $HOME/fim ]] && rm $HOME/fim
-        ${comando[0]} -y >/dev/null 2>&1
-        ${comando[1]} -y >/dev/null 2>&1
+        [[ -e $HOME/fim ]] && rm -f $HOME/fim
+        eval "${comando[0]}" >/dev/null 2>&1
+        [[ -n "${comando[1]}" ]] && eval "${comando[1]}" >/dev/null 2>&1
         touch $HOME/fim
-    ) >/dev/null 2>&1 &
+    ) &
     tput civis
     echo -ne "  \033[1;33m◇ PLEASE WAIT... \033[1;37m- \033[1;33m["
     while true; do
@@ -53,7 +66,7 @@ fun_bar() {
             echo -ne "\033[1;31m#"
             sleep 0.1s
         done
-        [[ -e $HOME/fim ]] && rm $HOME/fim && break
+        [[ -e $HOME/fim ]] && rm -f $HOME/fim && break
         echo -e "\033[1;33m]"
         sleep 1s
         tput cuu1
