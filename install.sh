@@ -145,15 +145,15 @@ fun_install_scripts() {
     echo "SSH Tunnel Manager v1.0.0" > /usr/lib/sshtunnelmanager
     
     # Create menu command
-    cat > /usr/local/bin/menu << MENUEOF
+    cat > /usr/local/bin/menu << 'MENUEOF'
 #!/bin/bash
-bash "$SCRIPT_DIR/menu.sh"
+cd /root/ssltunnel && bash menu.sh
 MENUEOF
     chmod +x /usr/local/bin/menu
     
-    # Create shortcut
-    echo "/usr/local/bin/menu" > /bin/menu 2>/dev/null && chmod +x /bin/menu 2>/dev/null
-    echo "/usr/local/bin/menu" > /bin/h 2>/dev/null && chmod +x /bin/h 2>/dev/null
+    # Create shortcut symlinks
+    ln -sf /usr/local/bin/menu /usr/bin/menu 2>/dev/null
+    ln -sf /usr/local/bin/menu /usr/bin/h 2>/dev/null
     
     # Create autostart file
     [[ ! -f /etc/autostart ]] && touch /etc/autostart
