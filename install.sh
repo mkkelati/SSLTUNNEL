@@ -128,7 +128,7 @@ echo ""
 
 # Install required packages
 inst_pct() {
-    _pacotes=("bc" "cron" "screen" "nano" "unzip" "lsof" "net-tools" "dos2unix" "nload" "jq" "curl" "figlet" "python3")
+    _pacotes=("bc" "cron" "screen" "nano" "unzip" "lsof" "net-tools" "dos2unix" "nload" "jq" "curl" "figlet" "python3" "dnsutils")
     for _prog in "${_pacotes[@]}"; do
         apt install "$_prog" -y 2>/dev/null
     done
@@ -182,6 +182,11 @@ MENUEOF
     
     # Store IP
     wget -qO- ipv4.icanhazip.com > /etc/SSHTunnelManager/IP 2>/dev/null
+    
+    # Copy proxy scripts to manager directory
+    cp -f "$SCRIPT_DIR/lib/proxy.py" /etc/SSHTunnelManager/proxy.py 2>/dev/null
+    cp -f "$SCRIPT_DIR/lib/wsproxy.py" /etc/SSHTunnelManager/wsproxy.py 2>/dev/null
+    chmod +x /etc/SSHTunnelManager/proxy.py /etc/SSHTunnelManager/wsproxy.py 2>/dev/null
 }
 fun_bar 'fun_install_scripts'
 
@@ -197,4 +202,15 @@ echo ""
 echo -e "\033[1;33m◇ Server IP: \033[1;32m$IP\033[0m"
 echo ""
 echo -e "\033[1;31m◇──────────── SSH TUNNEL MANAGER ────────────◇\033[0m"
+echo ""
+
+# Offer domain setup after installation
+echo -ne "\033[1;36m◇ Do you want to set up a domain for WS-ePro now? [Y/N]: \033[1;37m"
+read setup_domain
+if [[ "$setup_domain" =~ ^[Yy]$ ]]; then
+    bash "$SCRIPT_DIR/modules/domain_setup.sh"
+fi
+
+echo ""
+echo -e "\033[1;33m◇ Installation complete! Type \033[1;32mmenu\033[1;33m to start.\033[0m"
 echo ""

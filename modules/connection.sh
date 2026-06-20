@@ -1152,6 +1152,185 @@ fun_badvpn() {
 # ==========================================
 #  Main Connection Menu
 # ==========================================
+# ==========================================
+#  WS-ePro Mode (WebSocket + Domain)
+# ==========================================
+fun_wsepro() {
+    clear
+    print_section "WS-ePRO MODE"
+    echo ""
+
+    local vps_ip domain ws_port ssl_port
+    vps_ip=$(get_server_ip)
+    
+    # Check domain
+    if [[ -f "$MANAGER_DIR/domain" ]]; then
+        domain=$(cat "$MANAGER_DIR/domain")
+    else
+        echo -e "${RED}◇ No domain configured!${NC}"
+        echo -e "${YELLOW}◇ You need to set up a domain first.${NC}"
+        echo ""
+        echo -ne "${GREEN}◇ Set up domain now? [Y/N]: ${WHITE}"
+        read yn
+        if [[ "$yn" =~ ^[Yy]$ ]]; then
+            bash "$SCRIPT_DIR/modules/domain_setup.sh"
+            [[ -f "$MANAGER_DIR/domain" ]] && domain=$(cat "$MANAGER_DIR/domain") || { sleep 2; return; }
+        else
+            sleep 2; return
+        fi
+    fi
+
+    echo -e "${GREEN}◇ Domain: ${WHITE}$domain${NC}"
+    echo -e "${GREEN}◇ VPS IP: ${WHITE}$vps_ip${NC}"
+    echo ""
+    echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+    echo ""
+    echo -e "${RED}[${CYAN}1${RED}] ${WHITE}• ${YELLOW}ENABLE WS-ePRO (WebSocket + Domain)"
+    echo -e "${RED}[${CYAN}2${RED}] ${WHITE}• ${YELLOW}DISABLE WS-ePRO"
+    echo -e "${RED}[${CYAN}3${RED}] ${WHITE}• ${YELLOW}SHOW CONNECTION INFO"
+    echo -e "${RED}[${CYAN}0${RED}] ${WHITE}• ${YELLOW}COME BACK${NC}"
+    echo ""
+    echo -ne "${GREEN}WHAT DO YOU WANT TO DO ${YELLOW}?${WHITE} "
+    read resposta
+
+    case "$resposta" in
+        1)
+            clear
+            print_section "ENABLE WS-ePRO"
+            echo ""
+
+            # Check if WebSocket is already running
+            if ps x | grep -w wsproxy.py | grep -v grep >/dev/null 2>&1; then
+                ws_port=$(netstat -nltp 2>/dev/null | grep 'python' | grep -v '127.0.0.1' | awk '{print $4}' | cut -d: -f2 | head -1)
+                echo -e "${YELLOW}◇ WebSocket already running on port: ${WHITE}$ws_port${NC}"
+                echo -ne "${GREEN}◇ Use this port? [Y/N]: ${WHITE}"
+                read use_existing
+                if [[ ! "$use_existing" =~ ^[Yy]$ ]]; then
+                    echo -ne "\n${GREEN}◇ WHICH PORT FOR WEBSOCKET ${YELLOW}?${WHITE}: "
+                    read ws_port
+                    [[ -z "$ws_port" ]] && { echo -e "\n${RED}Invalid port!${NC}"; sleep 3; return; }
+                    verify_port "$ws_port" || { sleep 3; return; }
+                    
+                    # Stop old WS and start new
+                    for pidproxy in $(screen -ls 2>/dev/null | grep ".ws" | awk '{print $1}'); do
+                        screen -r -S "$pidproxy" -X quit
+                    done
+                    [[ $(grep -wc "wsproxy.py" "$AUTOSTART_FILE") != '0' ]] && sed -i '/wsproxy.py/d' "$AUTOSTART_FILE"
+                    sleep 1
+                    screen -dmS ws python3 "$MANAGER_DIR/wsproxy.py" "$ws_port" 2>/dev/null
+                    echo -e "netstat -tlpn | grep -w $ws_port > /dev/null || { screen -r -S 'ws' -X quit; screen -dmS ws python3 $MANAGER_DIR/wsproxy.py $ws_port; }" >> "$AUTOSTART_FILE"
+                fi
+            else
+                echo -ne "${GREEN}◇ WHICH PORT FOR WEBSOCKET ${YELLOW}?${WHITE}: "
+                read ws_port
+                [[ -z "$ws_port" ]] && { echo -e "\n${RED}Invalid port!${NC}"; sleep 3; return; }
+                verify_port "$ws_port" || { sleep 3; return; }
+                
+                echo -e "\n${GREEN}STARTING WS-ePRO WEBSOCKET...${YELLOW}"
+                _start_wsepro() {
+                    sleep 1
+                    screen -dmS ws python3 "$MANAGER_DIR/wsproxy.py" "$ws_port" 2>/dev/null
+                    [[ $(grep -wc "wsproxy.py" "$AUTOSTART_FILE") = '0' ]] && {
+                        echo -e "netstat -tlpn | grep -w $ws_port > /dev/null || { screen -r -S 'ws' -X quit; screen -dmS ws python3 $MANAGER_DIR/wsproxy.py $ws_port; }" >> "$AUTOSTART_FILE"
+                    }
+                }
+                echo ""
+                fun_bar '_start_wsepro'
+            fi
+
+            # Get active ports
+            ws_port=$(netstat -nltp 2>/dev/null | grep 'python' | grep -v '127.0.0.1' | awk '{print $4}' | cut -d: -f2 | head -1)
+            ssl_port=$(netstat -nltp 2>/dev/null | grep 'stunnel' | awk '{print $4}' | cut -d: -f2 | head -1)
+            
+            echo ""
+            echo -e "${GREEN}◇ WS-ePRO SUCCESSFULLY ENABLED!${NC}"
+            echo ""
+            echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+            echo -e "${BG_BLUE}     WS-ePRO CONNECTION INFO     ${NC}"
+            echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+            echo ""
+            echo -e "${GREEN}◇ Domain: ${WHITE}$domain${NC}"
+            echo -e "${GREEN}◇ WebSocket Port: ${WHITE}$ws_port${NC}"
+            [[ -n "$ssl_port" ]] && echo -e "${GREEN}◇ SSL Port: ${WHITE}$ssl_port${NC}"
+            echo ""
+            echo -e "${YELLOW}◇ HTTP Injector / ePro Payload:${NC}"
+            echo ""
+            echo -e "${WHITE}GET / HTTP/1.1[crlf]Host: $domain[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==[crlf][crlf]${NC}"
+            echo ""
+            if [[ -n "$ssl_port" ]]; then
+                echo -e "${YELLOW}◇ For WSS (WebSocket over SSL):${NC}"
+                echo -e "${GREEN}◇ Remote Proxy: ${WHITE}$domain:$ssl_port${NC}"
+                echo -e "${GREEN}◇ Payload → connect to WS port: ${WHITE}$ws_port${NC}"
+            fi
+            echo ""
+            echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+            echo ""
+            echo -ne "${GREEN}◇ Press ENTER to return${NC}"; read
+            ;;
+        2)
+            clear
+            print_error_section "DISABLE WS-ePRO"
+            echo ""
+            if ps x | grep -w wsproxy.py | grep -v grep >/dev/null 2>&1; then
+                _stop_wsepro() {
+                    for pidproxy in $(screen -ls 2>/dev/null | grep ".ws" | awk '{print $1}'); do
+                        screen -r -S "$pidproxy" -X quit
+                    done
+                    [[ $(grep -wc "wsproxy.py" "$AUTOSTART_FILE") != '0' ]] && sed -i '/wsproxy.py/d' "$AUTOSTART_FILE"
+                    sleep 1; screen -wipe >/dev/null 2>&1
+                }
+                echo -e "${GREEN}DISABLING WS-ePRO...${YELLOW}"
+                echo ""
+                fun_bar '_stop_wsepro'
+                echo -e "\n${GREEN}WS-ePRO SUCCESSFULLY DISABLED!${NC}"
+            else
+                echo -e "${YELLOW}◇ WS-ePRO is not currently running.${NC}"
+            fi
+            sleep 3
+            ;;
+        3)
+            clear
+            print_section "WS-ePRO CONNECTION INFO"
+            echo ""
+
+            ws_port=$(netstat -nltp 2>/dev/null | grep 'python' | grep -v '127.0.0.1' | awk '{print $4}' | cut -d: -f2 | head -1)
+            ssl_port=$(netstat -nltp 2>/dev/null | grep 'stunnel' | awk '{print $4}' | cut -d: -f2 | head -1)
+            local ssh_port
+            ssh_port=$(grep -E "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -1)
+            [[ -z "$ssh_port" ]] && ssh_port="22"
+
+            echo -e "${GREEN}◇ Domain: ${WHITE}$domain${NC}"
+            echo -e "${GREEN}◇ VPS IP: ${WHITE}$vps_ip${NC}"
+            echo -e "${GREEN}◇ SSH Port: ${WHITE}$ssh_port${NC}"
+            [[ -n "$ws_port" ]] && echo -e "${GREEN}◇ WebSocket Port: ${WHITE}$ws_port ${GREEN}(ACTIVE)${NC}" || echo -e "${RED}◇ WebSocket: NOT RUNNING${NC}"
+            [[ -n "$ssl_port" ]] && echo -e "${GREEN}◇ SSL Port: ${WHITE}$ssl_port ${GREEN}(ACTIVE)${NC}" || echo -e "${RED}◇ SSL: NOT INSTALLED${NC}"
+            echo ""
+            
+            if [[ -n "$ws_port" ]]; then
+                echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+                echo -e "${YELLOW}◇ WS Payload (HTTP Injector / ePro / HTTP Custom):${NC}"
+                echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+                echo ""
+                echo -e "${WHITE}GET / HTTP/1.1[crlf]Host: $domain[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==[crlf][crlf]${NC}"
+                echo ""
+                if [[ -n "$ssl_port" ]]; then
+                    echo -e "${YELLOW}◇ WSS Mode (SSL + WebSocket):${NC}"
+                    echo -e "${GREEN}◇ Server: ${WHITE}$domain${NC}"
+                    echo -e "${GREEN}◇ SSL/TLS Port: ${WHITE}$ssl_port${NC}"
+                    echo -e "${GREEN}◇ WebSocket Port: ${WHITE}$ws_port${NC}"
+                    echo -e "${GREEN}◇ SNI: ${WHITE}$domain${NC}"
+                fi
+            else
+                echo -e "${RED}◇ Enable WS-ePRO first (option 1)${NC}"
+            fi
+            echo ""
+            echo -ne "${GREEN}◇ Press ENTER to return${NC}"; read
+            ;;
+        0) return ;;
+        *) echo -e "\n${RED}Invalid option!${NC}"; sleep 2 ;;
+    esac
+}
+
 fun_conexao() {
     while true; do
         clear
@@ -1196,6 +1375,15 @@ fun_conexao() {
         
         echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
         echo ""
+        # Domain & WS-ePro status
+        local sts_domain sts_wsepro
+        [[ -f "$MANAGER_DIR/domain" ]] && sts_domain="${GREEN}♦ " || sts_domain="${RED}○ "
+        if [[ -f "$MANAGER_DIR/domain" ]] && ps x | grep -w wsproxy.py | grep -v grep >/dev/null 2>&1; then
+            sts_wsepro="${GREEN}♦ "
+        else
+            sts_wsepro="${RED}○ "
+        fi
+        
         echo -e "${RED}[${CYAN}01${RED}] ${WHITE}• ${YELLOW}OPENSSH $sts6"
         echo -e "${RED}[${CYAN}02${RED}] ${WHITE}• ${YELLOW}SQUID PROXY $sts1"
         echo -e "${RED}[${CYAN}03${RED}] ${WHITE}• ${YELLOW}DROPBEAR $sts2"
@@ -1204,6 +1392,8 @@ fun_conexao() {
         echo -e "${RED}[${CYAN}06${RED}] ${WHITE}• ${YELLOW}SSL TUNNEL $sts3"
         echo -e "${RED}[${CYAN}07${RED}] ${WHITE}• ${YELLOW}SSLH MULTIPLEX $sts7"
         echo -e "${RED}[${CYAN}08${RED}] ${WHITE}• ${YELLOW}BADVPN $sts8"
+        echo -e "${RED}[${CYAN}09${RED}] ${WHITE}• ${YELLOW}DOMAIN SETUP $sts_domain"
+        echo -e "${RED}[${CYAN}11${RED}] ${WHITE}• ${YELLOW}WS-ePRO MODE $sts_wsepro"
         echo -e "${RED}[${CYAN}10${RED}] ${WHITE}• ${YELLOW}COME BACK ${GREEN}<<<${RED}"
         echo -e "${RED}[${CYAN}00${RED}] ${WHITE}• ${YELLOW}EXIT ${GREEN}<<<${NC}"
         echo ""
@@ -1224,6 +1414,8 @@ fun_conexao() {
             6|06) inst_ssl ;;
             7|07) fun_sslh ;;
             8|08) fun_badvpn ;;
+            9|09) bash "$SCRIPT_DIR/modules/domain_setup.sh"; ;;
+            11) fun_wsepro ;;
             10) bash "$SCRIPT_DIR/menu.sh"; exit ;;
             0|00) echo -e "${RED}Going out...${NC}"; sleep 2; clear; exit ;;
             *) echo -e "${RED}Invalid option!${NC}"; sleep 2 ;;
