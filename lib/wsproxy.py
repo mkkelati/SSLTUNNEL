@@ -1,222 +1,158 @@
 #!/usr/bin/env python3
 # ============================================
-#  SSH TUNNEL MANAGER - WebSocket Proxy
+#  SSH TUNNEL MANAGER - WebSocket/HTTP Proxy
+#  For HTTP Injector, ePro, HTTP Custom
+#  Chain: Client → Stunnel(TLS) → This Proxy → SSH
 # ============================================
 
 import socket
 import threading
 import sys
 import select
-import hashlib
-import base64
-import struct
+import time
 
-BUFLEN = 4096
+BUFLEN = 8192
 TIMEOUT = 60
-DEFAULT_HOST = '127.0.0.1:22'
-WS_MAGIC = '258EAFA5-E914-47DA-95CA-5AB9DC525C63'
+DEFAULT_HOST = '127.0.0.1'
+DEFAULT_PORT = 22
+RESPONSE = b'HTTP/1.1 200 Connection established\r\n\r\n'
 
-class WebSocketProxy(threading.Thread):
+
+class ProxyServer(threading.Thread):
     def __init__(self, host, port):
         threading.Thread.__init__(self)
+        self.daemon = True
         self.running = False
         self.host = host
         self.port = port
-        self.threads = []
-        self.lock = threading.Lock()
 
     def run(self):
-        self.soc = socket.socket(socket.AF_INET)
+        self.soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.soc.settimeout(2)
         self.soc.bind((self.host, self.port))
-        self.soc.listen(5)
+        self.soc.listen(128)
         self.running = True
 
         try:
             while self.running:
                 try:
-                    c, addr = self.soc.accept()
-                    c.setblocking(1)
+                    client, addr = self.soc.accept()
+                    client.setblocking(1)
+                    handler = ConnectionHandler(client, addr)
+                    handler.start()
                 except socket.timeout:
                     continue
-                conn = WSHandler(c, self, addr)
-                conn.start()
-                with self.lock:
-                    self.threads.append(conn)
         finally:
             self.running = False
             self.soc.close()
 
     def close(self):
         self.running = False
-        with self.lock:
-            for t in self.threads:
-                t.running = False
 
 
-class WSHandler(threading.Thread):
-    def __init__(self, client, server, addr):
+class ConnectionHandler(threading.Thread):
+    def __init__(self, client, addr):
         threading.Thread.__init__(self)
+        self.daemon = True
         self.client = client
-        self.server = server
         self.addr = addr
+        self.target = None
         self.running = True
-
-    def close(self):
-        try:
-            self.client.shutdown(socket.SHUT_RDWR)
-            self.client.close()
-        except:
-            pass
-        try:
-            self.target.shutdown(socket.SHUT_RDWR)
-            self.target.close()
-        except:
-            pass
 
     def run(self):
         try:
-            data = self.client.recv(BUFLEN).decode('utf-8', errors='ignore')
-            
-            if 'Upgrade: websocket' in data or 'upgrade: websocket' in data:
-                self.handle_websocket(data)
-            elif data.startswith('CONNECT'):
-                self.handle_connect(data)
-            elif data.startswith('GET') or data.startswith('POST'):
-                # HTTP request without upgrade - respond 200 and relay to SSH
-                response = 'HTTP/1.1 200 Connection Established\r\n\r\n'
-                self.client.sendall(response.encode())
-                self.connect_and_relay(DEFAULT_HOST)
-            else:
-                host_port = DEFAULT_HOST
-                self.connect_and_relay(host_port)
-        except Exception as e:
+            # Step 1: Read client's HTTP payload/request
+            data = self.client.recv(BUFLEN)
+            if not data:
+                return
+
+            # Step 2: Set TCP_NODELAY to prevent Nagle buffering
+            # This ensures our 200 response goes out as its own TCP segment
+            self.client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+            # Step 3: Send 200 response IMMEDIATELY
+            # This tells HTTP Injector the tunnel is ready
+            self.client.sendall(RESPONSE)
+
+            # Step 4: NOW connect to SSH (after response is sent)
+            # This prevents SSH banner from mixing with our HTTP response
+            self.target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.target.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.target.connect((DEFAULT_HOST, DEFAULT_PORT))
+
+            # Step 5: Relay data bidirectionally
+            self._relay()
+
+        except Exception:
             pass
         finally:
-            self.close()
-
-    def handle_websocket(self, data):
-        # Extract target host first
-        host_port = DEFAULT_HOST
-        for line in data.split('\r\n'):
-            if line.startswith('X-Real-Host:'):
-                host_port = line.split(':', 1)[1].strip()
-                break
-            elif line.startswith('Host:'):
-                hp = line.split(':', 1)[1].strip()
-                if ':' in hp:
-                    host_port = hp
-
-        # Extract WebSocket key
-        key = ''
-        for line in data.split('\r\n'):
-            if line.lower().startswith('sec-websocket-key:'):
-                key = line.split(':', 1)[1].strip()
-                break
-
-        if key:
-            # Real WebSocket client with key - do proper WS handshake
-            accept = base64.b64encode(
-                hashlib.sha1((key + WS_MAGIC).encode()).digest()
-            ).decode()
-
-            response = (
-                'HTTP/1.1 101 Switching Protocols\r\n'
-                'Upgrade: websocket\r\n'
-                'Connection: Upgrade\r\n'
-                f'Sec-WebSocket-Accept: {accept}\r\n'
-                '\r\n'
-            )
-            self.client.sendall(response.encode())
-        else:
-            # HTTP Injector / ePro custom payload (no WS key)
-            # Connect to SSH FIRST so it's ready before client starts
-            if ':' in host_port:
-                host, port = host_port.rsplit(':', 1)
-                port = int(port)
-            else:
-                host = host_port
-                port = 22
-            self.target = socket.socket(socket.AF_INET)
-            self.target.connect((host, port))
-
-            # Send 200 (raw tunnel) - NOT 101 which triggers WS framing
-            response = 'HTTP/1.1 200 Connection Established\r\n\r\n'
-            self.client.sendall(response.encode())
-
-            # Go straight to relay (target already connected)
-            self._relay()
-            return
-
-        self.connect_and_relay(host_port)
-
-    def handle_connect(self, data):
-        # Extract host:port from CONNECT line
-        try:
-            line = data.split('\r\n')[0]
-            host_port = line.split(' ')[1]
-        except:
-            host_port = DEFAULT_HOST
-
-        response = 'HTTP/1.1 200 Connection Established\r\n\r\n'
-        self.client.sendall(response.encode())
-        self.connect_and_relay(host_port)
-
-    def connect_and_relay(self, host_port):
-        if ':' in host_port:
-            host, port = host_port.rsplit(':', 1)
-            port = int(port)
-        else:
-            host = host_port
-            port = 22
-
-        self.target = socket.socket(socket.AF_INET)
-        self.target.connect((host, port))
-        self._relay()
+            self._close()
 
     def _relay(self):
-        socs = [self.client, self.target]
-        count = 0
+        """Bidirectional data relay between client and SSH target."""
+        sockets = [self.client, self.target]
+        idle_count = 0
+
         while self.running:
-            count += 1
-            (recv, _, err) = select.select(socs, [], socs, 3)
-            if err:
+            try:
+                readable, _, errors = select.select(sockets, [], sockets, 3)
+            except Exception:
                 break
-            if recv:
-                for s in recv:
+
+            if errors:
+                break
+
+            if readable:
+                idle_count = 0
+                for sock in readable:
                     try:
-                        data = s.recv(BUFLEN)
+                        data = sock.recv(BUFLEN)
                         if not data:
                             self.running = False
                             break
-                        if s is self.client:
+                        if sock is self.client:
                             self.target.sendall(data)
                         else:
                             self.client.sendall(data)
-                        count = 0
-                    except:
+                    except Exception:
                         self.running = False
                         break
-            if count >= TIMEOUT:
-                break
+            else:
+                idle_count += 1
+                if idle_count >= TIMEOUT:
+                    break
+
+    def _close(self):
+        for sock in (self.client, self.target):
+            if sock:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
+                try:
+                    sock.close()
+                except Exception:
+                    pass
 
 
 def main(host, port):
-    print("\n:---------------------------------------:")
-    print(":  SSH Tunnel Manager - WebSocket Proxy :")
-    print(":  Port: " + str(port) + "                              :")
-    print(":---------------------------------------:\n")
-    
-    server = WebSocketProxy(host, port)
+    print(f"\n:------------------------------------------:")
+    print(f":  SSH Tunnel Manager - HTTP/WS Proxy      :")
+    print(f":  Listening on port: {port}                    :")
+    print(f":  Forwarding to: {DEFAULT_HOST}:{DEFAULT_PORT}         :")
+    print(f":------------------------------------------:\n")
+
+    server = ProxyServer(host, port)
     server.start()
-    
+
     try:
         while True:
-            pass
+            time.sleep(1)
     except KeyboardInterrupt:
         print('\nStopping...')
         server.close()
+
 
 if __name__ == '__main__':
     port = 8799
