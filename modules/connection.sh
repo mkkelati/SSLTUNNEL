@@ -1154,6 +1154,7 @@ fun_badvpn() {
 # ==========================================
 # ==========================================
 #  WS-ePro Mode (WebSocket + Domain)
+#  Architecture: Client → Stunnel (443/TLS) → wsproxy (internal) → SSH (22)
 # ==========================================
 fun_wsepro() {
     clear
@@ -1183,9 +1184,23 @@ fun_wsepro() {
     echo -e "${GREEN}◇ Domain: ${WHITE}$domain${NC}"
     echo -e "${GREEN}◇ VPS IP: ${WHITE}$vps_ip${NC}"
     echo ""
+    
+    # Show current WS-ePro status
+    local wsepro_active="NO"
+    if ps x | grep -w wsproxy.py | grep -v grep >/dev/null 2>&1 && [[ -e /etc/stunnel/stunnel.conf ]] && grep -q "wsproxy" /etc/stunnel/stunnel.conf 2>/dev/null; then
+        wsepro_active="YES"
+        echo -e "${GREEN}◇ WS-ePRO Status: ${WHITE}ACTIVE ♦${NC}"
+    else
+        echo -e "${RED}◇ WS-ePRO Status: ${WHITE}INACTIVE ○${NC}"
+    fi
+    
+    echo ""
     echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
     echo ""
-    echo -e "${RED}[${CYAN}1${RED}] ${WHITE}• ${YELLOW}ENABLE WS-ePRO (WebSocket + Domain)"
+    echo -e "${YELLOW}◇ WS-ePRO uses: Stunnel(443/TLS) → WebSocket → SSH${NC}"
+    echo -e "${YELLOW}◇ HTTP Injector mode: SSL/TLS Proxy${NC}"
+    echo ""
+    echo -e "${RED}[${CYAN}1${RED}] ${WHITE}• ${YELLOW}ENABLE WS-ePRO (SSL + WebSocket + Domain)"
     echo -e "${RED}[${CYAN}2${RED}] ${WHITE}• ${YELLOW}DISABLE WS-ePRO"
     echo -e "${RED}[${CYAN}3${RED}] ${WHITE}• ${YELLOW}SHOW CONNECTION INFO"
     echo -e "${RED}[${CYAN}0${RED}] ${WHITE}• ${YELLOW}COME BACK${NC}"
@@ -1198,72 +1213,175 @@ fun_wsepro() {
             clear
             print_section "ENABLE WS-ePRO"
             echo ""
+            echo -e "${YELLOW}◇ Architecture: Client → Stunnel (TLS/443) → WebSocket → SSH${NC}"
+            echo ""
 
-            # Check if WebSocket is already running
-            if ps x | grep -w wsproxy.py | grep -v grep >/dev/null 2>&1; then
-                ws_port=$(netstat -nltp 2>/dev/null | grep 'python' | grep -v '127.0.0.1' | awk '{print $4}' | cut -d: -f2 | head -1)
-                echo -e "${YELLOW}◇ WebSocket already running on port: ${WHITE}$ws_port${NC}"
-                echo -ne "${GREEN}◇ Use this port? [Y/N]: ${WHITE}"
-                read use_existing
-                if [[ ! "$use_existing" =~ ^[Yy]$ ]]; then
-                    echo -ne "\n${GREEN}◇ WHICH PORT FOR WEBSOCKET ${YELLOW}?${WHITE}: "
-                    read ws_port
-                    [[ -z "$ws_port" ]] && { echo -e "\n${RED}Invalid port!${NC}"; sleep 3; return; }
-                    verify_port "$ws_port" || { sleep 3; return; }
-                    
-                    # Stop old WS and start new
-                    for pidproxy in $(screen -ls 2>/dev/null | grep ".ws" | awk '{print $1}'); do
-                        screen -r -S "$pidproxy" -X quit
-                    done
-                    [[ $(grep -wc "wsproxy.py" "$AUTOSTART_FILE") != '0' ]] && sed -i '/wsproxy.py/d' "$AUTOSTART_FILE"
-                    sleep 1
-                    screen -dmS ws python3 "$MANAGER_DIR/wsproxy.py" "$ws_port" 2>/dev/null
-                    echo -e "netstat -tlpn | grep -w $ws_port > /dev/null || { screen -r -S 'ws' -X quit; screen -dmS ws python3 $MANAGER_DIR/wsproxy.py $ws_port; }" >> "$AUTOSTART_FILE"
-                fi
-            else
-                echo -ne "${GREEN}◇ WHICH PORT FOR WEBSOCKET ${YELLOW}?${WHITE}: "
-                read ws_port
-                [[ -z "$ws_port" ]] && { echo -e "\n${RED}Invalid port!${NC}"; sleep 3; return; }
-                verify_port "$ws_port" || { sleep 3; return; }
-                
-                echo -e "\n${GREEN}STARTING WS-ePRO WEBSOCKET...${YELLOW}"
-                _start_wsepro() {
-                    sleep 1
-                    screen -dmS ws python3 "$MANAGER_DIR/wsproxy.py" "$ws_port" 2>/dev/null
-                    [[ $(grep -wc "wsproxy.py" "$AUTOSTART_FILE") = '0' ]] && {
-                        echo -e "netstat -tlpn | grep -w $ws_port > /dev/null || { screen -r -S 'ws' -X quit; screen -dmS ws python3 $MANAGER_DIR/wsproxy.py $ws_port; }" >> "$AUTOSTART_FILE"
-                    }
-                }
-                echo ""
-                fun_bar '_start_wsepro'
-            fi
-
-            # Get active ports
-            ws_port=$(netstat -nltp 2>/dev/null | grep 'python' | grep -v '127.0.0.1' | awk '{print $4}' | cut -d: -f2 | head -1)
-            ssl_port=$(netstat -nltp 2>/dev/null | grep 'stunnel' | awk '{print $4}' | cut -d: -f2 | head -1)
+            # Determine SSL port (default 443)
+            local ssl_listen_port="443"
+            echo -ne "${GREEN}◇ SSL/TLS Listen Port [default 443]: ${WHITE}"
+            read input_ssl_port
+            [[ -n "$input_ssl_port" ]] && ssl_listen_port="$input_ssl_port"
             
-            echo ""
-            echo -e "${GREEN}◇ WS-ePRO SUCCESSFULLY ENABLED!${NC}"
-            echo ""
-            echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
-            echo -e "${BG_BLUE}     WS-ePRO CONNECTION INFO     ${NC}"
-            echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
-            echo ""
-            echo -e "${GREEN}◇ Domain: ${WHITE}$domain${NC}"
-            echo -e "${GREEN}◇ WebSocket Port: ${WHITE}$ws_port${NC}"
-            [[ -n "$ssl_port" ]] && echo -e "${GREEN}◇ SSL Port: ${WHITE}$ssl_port${NC}"
-            echo ""
-            echo -e "${YELLOW}◇ HTTP Injector / ePro Payload:${NC}"
-            echo ""
-            echo -e "${WHITE}GET / HTTP/1.1[crlf]Host: $domain[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==[crlf][crlf]${NC}"
-            echo ""
-            if [[ -n "$ssl_port" ]]; then
-                echo -e "${YELLOW}◇ For WSS (WebSocket over SSL):${NC}"
-                echo -e "${GREEN}◇ Remote Proxy: ${WHITE}$domain:$ssl_port${NC}"
-                echo -e "${GREEN}◇ Payload → connect to WS port: ${WHITE}$ws_port${NC}"
+            # WebSocket internal port (not exposed directly, stunnel forwards to it)
+            local ws_internal_port="8799"
+            echo -ne "${GREEN}◇ WebSocket Internal Port [default 8799]: ${WHITE}"
+            read input_ws_port
+            [[ -n "$input_ws_port" ]] && ws_internal_port="$input_ws_port"
+            
+            # Prevent WS port = SSL port
+            if [[ "$ws_internal_port" == "$ssl_listen_port" ]]; then
+                echo -e "\n${RED}◇ ERROR: WebSocket port cannot be same as SSL port!${NC}"
+                echo -e "${YELLOW}◇ SSL handles TLS on $ssl_listen_port, WebSocket must be a different port.${NC}"
+                sleep 3; return
             fi
+
             echo ""
-            echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+            echo -e "${GREEN}◇ Setting up WS-ePRO chain:${NC}"
+            echo -e "${WHITE}  Client → Stunnel ($ssl_listen_port/TLS) → wsproxy ($ws_internal_port) → SSH (22)${NC}"
+            echo ""
+
+            # Step 1: Start/restart WebSocket proxy on internal port
+            echo -e "${GREEN}◇ Step 1: Starting WebSocket Proxy on port $ws_internal_port...${NC}"
+            _setup_ws() {
+                # Kill existing wsproxy
+                for pidproxy in $(screen -ls 2>/dev/null | grep ".ws" | awk '{print $1}'); do
+                    screen -r -S "$pidproxy" -X quit
+                done
+                [[ $(grep -wc "wsproxy.py" "$AUTOSTART_FILE") != '0' ]] && sed -i '/wsproxy.py/d' "$AUTOSTART_FILE"
+                sleep 1
+                screen -wipe >/dev/null 2>&1
+                
+                # Start wsproxy on internal port
+                screen -dmS ws python3 "$MANAGER_DIR/wsproxy.py" "$ws_internal_port" 2>/dev/null
+                echo -e "netstat -tlpn | grep -w $ws_internal_port > /dev/null || { screen -r -S 'ws' -X quit; screen -dmS ws python3 $MANAGER_DIR/wsproxy.py $ws_internal_port; }" >> "$AUTOSTART_FILE"
+            }
+            fun_bar '_setup_ws'
+
+            # Step 2: Install/reconfigure Stunnel to forward to wsproxy
+            echo -e "\n${GREEN}◇ Step 2: Configuring Stunnel (TLS) → WebSocket...${NC}"
+            _setup_stunnel_wsepro() {
+                # Install stunnel if not present
+                if ! command -v stunnel4 >/dev/null 2>&1; then
+                    apt-get update -y
+                    apt-get install stunnel4 openssl -y
+                fi
+                
+                # Generate certificate if not present
+                if [[ ! -f /etc/stunnel/stunnel.pem ]]; then
+                    mkdir -p /etc/stunnel
+                    openssl req -new -newkey rsa:4096 -days 1050 -nodes -x509 \
+                        -subj "/C=US/ST=California/L=San Francisco/O=Cloudflare Inc/CN=$domain" \
+                        -addext "subjectAltName=DNS:$domain,DNS:*.$domain" \
+                        -keyout /etc/stunnel/stunnel.key -out /etc/stunnel/stunnel.crt 2>/dev/null
+                    if [[ $? -ne 0 ]]; then
+                        openssl req -new -newkey rsa:4096 -days 1050 -nodes -x509 \
+                            -subj "/C=US/ST=California/L=San Francisco/O=Cloudflare Inc/CN=$domain" \
+                            -keyout /etc/stunnel/stunnel.key -out /etc/stunnel/stunnel.crt 2>/dev/null
+                    fi
+                    cat /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key > /etc/stunnel/stunnel.pem
+                    chmod 600 /etc/stunnel/stunnel.pem /etc/stunnel/stunnel.key
+                    rm -f /etc/stunnel/stunnel.crt /etc/stunnel/stunnel.key
+                fi
+                
+                # Write stunnel config pointing to wsproxy
+                cat > /etc/stunnel/stunnel.conf << SSLEOF
+; ============================================
+; SSH Tunnel Manager - WS-ePRO Configuration
+; Chain: Client → Stunnel (TLS) → wsproxy → SSH
+; Enforced: TLSv1.3 / TLS_AES_256_GCM_SHA384
+; ============================================
+
+pid = /var/run/stunnel4/stunnel4.pid
+cert = /etc/stunnel/stunnel.pem
+client = no
+
+; === Socket tuning ===
+socket = a:SO_REUSEADDR=1
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+socket = a:SO_KEEPALIVE=1
+
+; === TLS 1.3 Only ===
+options = NO_SSLv2
+options = NO_SSLv3
+options = NO_TLSv1
+options = NO_TLSv1_1
+options = NO_TLSv1_2
+
+; === Cipher: AES-256-GCM primary, CHACHA20 fallback ===
+ciphersuites = TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+
+; === Strong ECDH curves ===
+curves = P-384:P-521:X25519
+
+; === Session management ===
+sessionCacheSize = 20000
+sessionCacheTimeout = 300
+renegotiation = no
+
+; === Timeouts ===
+TIMEOUTclose = 0
+TIMEOUTconnect = 10
+TIMEOUTidle = 43200
+
+; === Logging ===
+debug = 0
+output = /var/log/stunnel4/stunnel.log
+
+[wsepro]
+accept = $ssl_listen_port
+connect = 127.0.0.1:$ws_internal_port
+SSLEOF
+                
+                # Enable and restart stunnel
+                [[ -f /etc/default/stunnel4 ]] && sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4
+                mkdir -p /var/run/stunnel4
+                chown stunnel4:stunnel4 /var/run/stunnel4 2>/dev/null
+                [[ -f /usr/sbin/ufw ]] && ufw allow ${ssl_listen_port}/tcp >/dev/null 2>&1
+                [[ -f /usr/sbin/ufw ]] && ufw allow ${ws_internal_port}/tcp >/dev/null 2>&1
+                
+                service stunnel4 stop 2>/dev/null
+                killall stunnel4 2>/dev/null
+                sleep 1
+                service stunnel4 start 2>/dev/null || /etc/init.d/stunnel4 start 2>/dev/null || stunnel4 /etc/stunnel/stunnel.conf 2>/dev/null
+            }
+            fun_bar '_setup_stunnel_wsepro'
+
+            # Verify
+            sleep 2
+            echo ""
+            if netstat -nltp 2>/dev/null | grep -q 'stunnel'; then
+                echo -e "${GREEN}◇ ✓ WS-ePRO SUCCESSFULLY ENABLED!${NC}"
+                echo ""
+                echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+                echo -e "${BG_BLUE}       WS-ePRO CONNECTION INFO       ${NC}"
+                echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+                echo ""
+                echo -e "${GREEN}◇ Domain (SNI): ${WHITE}$domain${NC}"
+                echo -e "${GREEN}◇ SSL/TLS Port: ${WHITE}$ssl_listen_port${NC}"
+                echo -e "${GREEN}◇ WebSocket (internal): ${WHITE}$ws_internal_port${NC}"
+                echo -e "${GREEN}◇ Protocol: ${WHITE}TLSv1.3${NC}"
+                echo ""
+                echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+                echo -e "${YELLOW}◇ HTTP Injector Settings:${NC}"
+                echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
+                echo ""
+                echo -e "${GREEN}◇ Tunnel Type: ${WHITE}SSL/TLS Proxy${NC}"
+                echo -e "${GREEN}◇ Server: ${WHITE}$domain${NC}"
+                echo -e "${GREEN}◇ Port: ${WHITE}$ssl_listen_port${NC}"
+                echo -e "${GREEN}◇ SNI: ${WHITE}$domain${NC}"
+                echo ""
+                echo -e "${YELLOW}◇ Payload (Custom):${NC}"
+                echo -e "${WHITE}GET / HTTP/1.1[crlf]Host: $domain[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==[crlf][crlf]${NC}"
+                echo ""
+                echo -e "${YELLOW}◇ OR use without payload (direct SSL/TLS):${NC}"
+                echo -e "${GREEN}◇ Just set Server: ${WHITE}$domain:$ssl_listen_port${NC}"
+                echo -e "${GREEN}◇ SNI: ${WHITE}$domain${NC}"
+                echo -e "${GREEN}◇ No payload needed for basic SSL mode${NC}"
+            else
+                echo -e "${RED}◇ WARNING: Stunnel may not have started!${NC}"
+                echo -e "${YELLOW}◇ Check: ${WHITE}tail -5 /var/log/stunnel4/stunnel.log${NC}"
+            fi
             echo ""
             echo -ne "${GREEN}◇ Press ENTER to return${NC}"; read
             ;;
@@ -1271,22 +1389,26 @@ fun_wsepro() {
             clear
             print_error_section "DISABLE WS-ePRO"
             echo ""
-            if ps x | grep -w wsproxy.py | grep -v grep >/dev/null 2>&1; then
-                _stop_wsepro() {
-                    for pidproxy in $(screen -ls 2>/dev/null | grep ".ws" | awk '{print $1}'); do
-                        screen -r -S "$pidproxy" -X quit
-                    done
-                    [[ $(grep -wc "wsproxy.py" "$AUTOSTART_FILE") != '0' ]] && sed -i '/wsproxy.py/d' "$AUTOSTART_FILE"
-                    sleep 1; screen -wipe >/dev/null 2>&1
-                }
-                echo -e "${GREEN}DISABLING WS-ePRO...${YELLOW}"
-                echo ""
-                fun_bar '_stop_wsepro'
-                echo -e "\n${GREEN}WS-ePRO SUCCESSFULLY DISABLED!${NC}"
-            else
-                echo -e "${YELLOW}◇ WS-ePRO is not currently running.${NC}"
-            fi
-            sleep 3
+            
+            _stop_wsepro() {
+                # Stop wsproxy
+                for pidproxy in $(screen -ls 2>/dev/null | grep ".ws" | awk '{print $1}'); do
+                    screen -r -S "$pidproxy" -X quit
+                done
+                [[ $(grep -wc "wsproxy.py" "$AUTOSTART_FILE") != '0' ]] && sed -i '/wsproxy.py/d' "$AUTOSTART_FILE"
+                screen -wipe >/dev/null 2>&1
+                
+                # Stop stunnel
+                service stunnel4 stop 2>/dev/null
+                killall stunnel4 2>/dev/null
+            }
+            echo -e "${GREEN}DISABLING WS-ePRO...${YELLOW}"
+            echo ""
+            fun_bar '_stop_wsepro'
+            echo -e "\n${GREEN}WS-ePRO SUCCESSFULLY DISABLED!${NC}"
+            echo -e "${YELLOW}◇ Stunnel and WebSocket proxy stopped.${NC}"
+            echo -e "${YELLOW}◇ To use SSL Tunnel without WS-ePRO, reinstall it from Connection Mode.${NC}"
+            sleep 4
             ;;
         3)
             clear
@@ -1302,26 +1424,30 @@ fun_wsepro() {
             echo -e "${GREEN}◇ Domain: ${WHITE}$domain${NC}"
             echo -e "${GREEN}◇ VPS IP: ${WHITE}$vps_ip${NC}"
             echo -e "${GREEN}◇ SSH Port: ${WHITE}$ssh_port${NC}"
-            [[ -n "$ws_port" ]] && echo -e "${GREEN}◇ WebSocket Port: ${WHITE}$ws_port ${GREEN}(ACTIVE)${NC}" || echo -e "${RED}◇ WebSocket: NOT RUNNING${NC}"
-            [[ -n "$ssl_port" ]] && echo -e "${GREEN}◇ SSL Port: ${WHITE}$ssl_port ${GREEN}(ACTIVE)${NC}" || echo -e "${RED}◇ SSL: NOT INSTALLED${NC}"
+            [[ -n "$ws_port" ]] && echo -e "${GREEN}◇ WebSocket Port: ${WHITE}$ws_port ${GREEN}(ACTIVE - internal)${NC}" || echo -e "${RED}◇ WebSocket: NOT RUNNING${NC}"
+            [[ -n "$ssl_port" ]] && echo -e "${GREEN}◇ SSL/TLS Port: ${WHITE}$ssl_port ${GREEN}(ACTIVE - public)${NC}" || echo -e "${RED}◇ SSL: NOT RUNNING${NC}"
             echo ""
             
-            if [[ -n "$ws_port" ]]; then
+            if [[ -n "$ssl_port" && -n "$ws_port" ]]; then
                 echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
-                echo -e "${YELLOW}◇ WS Payload (HTTP Injector / ePro / HTTP Custom):${NC}"
+                echo -e "${YELLOW}◇ Chain: Client → Stunnel($ssl_port) → wsproxy($ws_port) → SSH($ssh_port)${NC}"
                 echo -e "${BLUE}◇────────────────────────────────────────────────◇${NC}"
                 echo ""
+                echo -e "${YELLOW}◇ HTTP Injector Configuration:${NC}"
+                echo -e "${GREEN}◇ Tunnel Type: ${WHITE}SSL/TLS Proxy${NC}"
+                echo -e "${GREEN}◇ Server: ${WHITE}$domain${NC}"
+                echo -e "${GREEN}◇ Port: ${WHITE}$ssl_port${NC}"
+                echo -e "${GREEN}◇ SNI: ${WHITE}$domain${NC}"
+                echo ""
+                echo -e "${YELLOW}◇ Payload (if using Custom Payload mode):${NC}"
                 echo -e "${WHITE}GET / HTTP/1.1[crlf]Host: $domain[crlf]Upgrade: websocket[crlf]Connection: Upgrade[crlf]Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==[crlf][crlf]${NC}"
                 echo ""
-                if [[ -n "$ssl_port" ]]; then
-                    echo -e "${YELLOW}◇ WSS Mode (SSL + WebSocket):${NC}"
-                    echo -e "${GREEN}◇ Server: ${WHITE}$domain${NC}"
-                    echo -e "${GREEN}◇ SSL/TLS Port: ${WHITE}$ssl_port${NC}"
-                    echo -e "${GREEN}◇ WebSocket Port: ${WHITE}$ws_port${NC}"
-                    echo -e "${GREEN}◇ SNI: ${WHITE}$domain${NC}"
-                fi
-            else
-                echo -e "${RED}◇ Enable WS-ePRO first (option 1)${NC}"
+                echo -e "${YELLOW}◇ NOTE: After TLS handshake, stunnel decrypts and${NC}"
+                echo -e "${YELLOW}◇ forwards to WebSocket proxy which relays to SSH.${NC}"
+            elif [[ -z "$ssl_port" ]]; then
+                echo -e "${RED}◇ Stunnel is not running! Enable WS-ePRO first (option 1)${NC}"
+            elif [[ -z "$ws_port" ]]; then
+                echo -e "${RED}◇ WebSocket proxy is not running! Enable WS-ePRO first (option 1)${NC}"
             fi
             echo ""
             echo -ne "${GREEN}◇ Press ENTER to return${NC}"; read
