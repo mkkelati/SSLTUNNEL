@@ -28,7 +28,27 @@ if command -v git &>/dev/null; then
             read resp
             [[ "$resp" = 'y' ]] && {
                 echo -e "\n${GREEN}Updating...${NC}\n"
-                fun_bar 'git pull origin main 2>/dev/null || git pull origin master 2>/dev/null'
+                _do_update() {
+                    git pull origin main 2>/dev/null || git pull origin master 2>/dev/null
+                    # Copy updated proxy scripts to manager directory
+                    cp -f "$SCRIPT_DIR/lib/proxy.py" /etc/SSHTunnelManager/proxy.py 2>/dev/null
+                    cp -f "$SCRIPT_DIR/lib/wsproxy.py" /etc/SSHTunnelManager/wsproxy.py 2>/dev/null
+                    chmod +x /etc/SSHTunnelManager/proxy.py /etc/SSHTunnelManager/wsproxy.py 2>/dev/null
+                    # Set permissions on new/updated scripts
+                    find "$SCRIPT_DIR/modules/" -name "*.sh" -exec chmod +x {} \;
+                    chmod +x "$SCRIPT_DIR/lib/functions.sh" 2>/dev/null
+                    # Restart wsproxy if running
+                    if ps x | grep -w wsproxy.py | grep -v grep >/dev/null 2>&1; then
+                        local ws_port
+                        ws_port=$(netstat -nltp 2>/dev/null | grep 'python' | grep -v '127.0.0.1' | awk '{print $4}' | cut -d: -f2 | head -1)
+                        for pidproxy in $(screen -ls 2>/dev/null | grep ".ws" | awk '{print $1}'); do
+                            screen -r -S "$pidproxy" -X quit
+                        done
+                        sleep 1
+                        [[ -n "$ws_port" ]] && screen -dmS ws python3 /etc/SSHTunnelManager/wsproxy.py "$ws_port" 2>/dev/null
+                    fi
+                }
+                fun_bar '_do_update'
                 echo -e "\n${GREEN}◇ SCRIPT UPDATED SUCCESSFULLY!${NC}"
             } || {
                 echo -e "\n${RED}Update cancelled.${NC}"
