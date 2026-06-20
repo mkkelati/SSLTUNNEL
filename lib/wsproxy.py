@@ -97,6 +97,17 @@ class WSHandler(threading.Thread):
             self.close()
 
     def handle_websocket(self, data):
+        # Extract target host first
+        host_port = DEFAULT_HOST
+        for line in data.split('\r\n'):
+            if line.startswith('X-Real-Host:'):
+                host_port = line.split(':', 1)[1].strip()
+                break
+            elif line.startswith('Host:'):
+                hp = line.split(':', 1)[1].strip()
+                if ':' in hp:
+                    host_port = hp
+
         # Extract WebSocket key
         key = ''
         for line in data.split('\r\n'):
@@ -105,7 +116,7 @@ class WSHandler(threading.Thread):
                 break
 
         if key:
-            # Full WebSocket handshake with accept key
+            # Real WebSocket client with key - do proper WS handshake
             accept = base64.b64encode(
                 hashlib.sha1((key + WS_MAGIC).encode()).digest()
             ).decode()
@@ -117,27 +128,26 @@ class WSHandler(threading.Thread):
                 f'Sec-WebSocket-Accept: {accept}\r\n'
                 '\r\n'
             )
+            self.client.sendall(response.encode())
         else:
-            # No key (HTTP Injector custom payload) - simple 101 response
-            response = (
-                'HTTP/1.1 101 Switching Protocols\r\n'
-                'Upgrade: websocket\r\n'
-                'Connection: Upgrade\r\n'
-                '\r\n'
-            )
+            # HTTP Injector / ePro custom payload (no WS key)
+            # Connect to SSH FIRST so it's ready before client starts
+            if ':' in host_port:
+                host, port = host_port.rsplit(':', 1)
+                port = int(port)
+            else:
+                host = host_port
+                port = 22
+            self.target = socket.socket(socket.AF_INET)
+            self.target.connect((host, port))
 
-        self.client.sendall(response.encode())
+            # Send 200 (raw tunnel) - NOT 101 which triggers WS framing
+            response = 'HTTP/1.1 200 Connection Established\r\n\r\n'
+            self.client.sendall(response.encode())
 
-        # Extract target host
-        host_port = DEFAULT_HOST
-        for line in data.split('\r\n'):
-            if line.startswith('X-Real-Host:'):
-                host_port = line.split(':', 1)[1].strip()
-                break
-            elif line.startswith('Host:'):
-                hp = line.split(':', 1)[1].strip()
-                if ':' in hp:
-                    host_port = hp
+            # Go straight to relay (target already connected)
+            self._relay()
+            return
 
         self.connect_and_relay(host_port)
 
@@ -163,7 +173,9 @@ class WSHandler(threading.Thread):
 
         self.target = socket.socket(socket.AF_INET)
         self.target.connect((host, port))
+        self._relay()
 
+    def _relay(self):
         socs = [self.client, self.target]
         count = 0
         while self.running:
