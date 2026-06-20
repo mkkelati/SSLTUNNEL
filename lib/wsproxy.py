@@ -83,6 +83,11 @@ class WSHandler(threading.Thread):
                 self.handle_websocket(data)
             elif data.startswith('CONNECT'):
                 self.handle_connect(data)
+            elif data.startswith('GET') or data.startswith('POST'):
+                # HTTP request without upgrade - respond 200 and relay to SSH
+                response = 'HTTP/1.1 200 Connection Established\r\n\r\n'
+                self.client.sendall(response.encode())
+                self.connect_and_relay(DEFAULT_HOST)
             else:
                 host_port = DEFAULT_HOST
                 self.connect_and_relay(host_port)
@@ -99,22 +104,28 @@ class WSHandler(threading.Thread):
                 key = line.split(':', 1)[1].strip()
                 break
 
-        if not key:
-            return
+        if key:
+            # Full WebSocket handshake with accept key
+            accept = base64.b64encode(
+                hashlib.sha1((key + WS_MAGIC).encode()).digest()
+            ).decode()
 
-        # Compute accept key
-        accept = base64.b64encode(
-            hashlib.sha1((key + WS_MAGIC).encode()).digest()
-        ).decode()
+            response = (
+                'HTTP/1.1 101 Switching Protocols\r\n'
+                'Upgrade: websocket\r\n'
+                'Connection: Upgrade\r\n'
+                f'Sec-WebSocket-Accept: {accept}\r\n'
+                '\r\n'
+            )
+        else:
+            # No key (HTTP Injector custom payload) - simple 101 response
+            response = (
+                'HTTP/1.1 101 Switching Protocols\r\n'
+                'Upgrade: websocket\r\n'
+                'Connection: Upgrade\r\n'
+                '\r\n'
+            )
 
-        # Send WebSocket handshake response
-        response = (
-            'HTTP/1.1 101 Switching Protocols\r\n'
-            'Upgrade: websocket\r\n'
-            'Connection: Upgrade\r\n'
-            f'Sec-WebSocket-Accept: {accept}\r\n'
-            '\r\n'
-        )
         self.client.sendall(response.encode())
 
         # Extract target host
